@@ -116,6 +116,8 @@ function getViewerConfiguration() {
       thumbnailView: document.getElementById('thumbnailView'),
       outlineView: document.getElementById('outlineView'),
       attachmentsView: document.getElementById('attachmentsView'),
+      // etc
+      disableNotification: true,
     },
     sidebarResizer: {
       outerContainer: document.getElementById('outerContainer'),

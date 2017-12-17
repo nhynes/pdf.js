@@ -125,17 +125,93 @@ class PDFLinkService {
         return;
       }
 
-      if (this.pdfHistory) {
-        // Update the browser history before scrolling the new destination into
-        // view, to be able to accurately capture the current document position.
-        this.pdfHistory.pushCurrentPosition();
-        this.pdfHistory.push({ namedDest, explicitDest, pageNumber, });
-      }
+      let scrollToDest = () => {
+        if (this.pdfHistory) {
+          // Update the browser history before scrolling the new destination
+          // into view, so to accurately capture the current document position.
+          this.pdfHistory.pushCurrentPosition();
+          this.pdfHistory.push({ namedDest, explicitDest, pageNumber, });
+        }
 
-      this.pdfViewer.scrollPageIntoView({
-        pageNumber,
-        destArray: explicitDest,
-      });
+        this.pdfViewer.scrollPageIntoView({
+          pageNumber,
+          destArray: explicitDest,
+        });
+      };
+
+      if (namedDest.startsWith('cite')) {
+        this.pdfDocument.getPage(pageNumber).then((pdfPage) => {
+          return pdfPage.getTextContent();
+        }).then((textContent) => {
+          let refX = explicitDest[2], refY = explicitDest[3];
+          let nearestText = textContent.items.reduce((nearestText, text) => {
+            // find what is likely the author
+            if (!/^[a-z]/i.test(text.str)) {
+              return nearestText;
+            }
+            let textX = text.transform[4], textY = text.transform[5];
+            let dist = Math.abs(refX - textX) + Math.abs(refY - textY);
+            if (textY <= refY && dist < nearestText[0]) {
+              return [dist, text];
+            }
+            return nearestText;
+          }, [Number.MAX_VALUE, undefined]).pop();
+
+          let nearestPar = textContent.items.filter((text) => {
+            return /^[a-z]/i.test(text.str) &&
+              Math.abs(text.transform[5] - nearestText.transform[5]) <= 2;
+          }).map((text) => {
+            return text.str;
+          }).join(' ');
+
+          let req = new XMLHttpRequest();
+          let queryUrl = 'https://duckduckgo.com/html?q=' + nearestPar;
+          req.open('GET', queryUrl);
+          req.onload = function() {
+            if (this.status < 200 || this.status >= 300) {
+              scrollToDest();
+            }
+
+            let serp = document.createElement('template');
+            serp.innerHTML = req.responseText;
+            let results = serp.content.querySelectorAll('.result__a'),
+              links = Array.prototype.map.call(results, (a) => {
+                return a.href;
+              });
+
+            let paperLink;
+            for (let i = 0; i < links.length; i++) {
+              let link = links[i];
+              if (/arxiv\.org/.test(link)) {
+                paperLink = link.replace('/pdf/', '/abs/');
+              } else if (/nips\.cc/.test(link)) {
+                paperLink = link.replace('.pdf', '');
+              } else if (/jmlr\.csail/.test(link)) {
+                paperLink = link;
+              }
+
+              if (paperLink) {
+                break;
+              }
+            }
+
+            // eslint-disable-next-line no-undef
+            chrome.tabs.getCurrent((tab) => {
+              // eslint-disable-next-line no-undef
+              chrome.tabs.create({
+                url: paperLink || queryUrl.replace('/html', ''),
+                index: tab.index + 1,
+                active: false,
+                openerTabId: tab.id,
+              });
+            });
+          };
+          req.onerror = scrollToDest;
+          req.send();
+        });
+      } else {
+        scrollToDest();
+      }
     };
 
     new Promise((resolve, reject) => {

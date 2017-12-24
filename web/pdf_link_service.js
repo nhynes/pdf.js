@@ -139,30 +139,100 @@ class PDFLinkService {
         });
       };
 
-      if (namedDest.startsWith('cite')) {
-        this.pdfDocument.getPage(pageNumber).then((pdfPage) => {
-          return pdfPage.getTextContent();
-        }).then((textContent) => {
-          let refX = explicitDest[2], refY = explicitDest[3];
-          let nearestText = textContent.items.reduce((nearestText, text) => {
-            // find what is likely the author
-            if (!/^[a-z]/i.test(text.str)) {
-              return nearestText;
-            }
-            let textX = text.transform[4], textY = text.transform[5];
-            let dist = Math.abs(refX - textX) + Math.abs(refY - textY);
-            if (textY <= refY && dist < nearestText[0]) {
-              return [dist, text];
-            }
-            return nearestText;
-          }, [Number.MAX_VALUE, undefined]).pop();
+      if (!namedDest.startsWith('cite')) {
+        scrollToDest();
+        return;
+      }
 
-          let nearestPar = textContent.items.filter((text) => {
-            return /^[a-z]/i.test(text.str) &&
-              Math.abs(text.transform[5] - nearestText.transform[5]) <= 2;
-          }).map((text) => {
-            return text.str;
-          }).join(' ');
+      let sortNumeric = (a, b) => {
+        return a - b;
+      };
+      let getUnique = (uniq, itm) => {
+        if (uniq.length === 0 || (itm - uniq[uniq.length - 1]) > 0.01) {
+          uniq.push(itm);
+        }
+        return uniq;
+      };
+
+      let pdfPage = this.pdfDocument.getPage(pageNumber);
+
+      pdfPage.then((page) => {
+        return page.getTextContent();
+      }).then((textContent) => {
+        let lineHeight = Object.values(
+          textContent.items.reduce((byXs, text) => {
+            let textX = text.transform[4].toFixed(3);
+            let byX = byXs[textX] || [];
+            byX.push(text);
+            byXs[textX] = byX;
+            return byXs;
+          }, {}))
+          .filter((texts) => {
+            return texts.length > 1;
+          })
+          .map((texts) => {
+            return texts
+              .map((text) => {
+                return parseFloat(text.transform[5].toFixed(3)); // ys
+              })
+              .sort(sortNumeric).reduce(getUnique, [])
+              .reduce((deltas, y, i, arr) => {
+                let delta = y - arr[i - 1];
+                deltas = Array.isArray(deltas) ? deltas : [];
+                deltas.push(delta);
+                return deltas;
+              })
+              .sort(sortNumeric).reduce(getUnique, []);
+          })
+          .reduce((flat, deltas) => {
+            return flat.concat(deltas);
+          })
+          .sort(sortNumeric).reduce(getUnique, [])[0];
+
+        let refX = explicitDest[2], refY = explicitDest[3];
+        // /\[\d+\]\s*/
+        let nearestText = textContent.items.reduce((nearestText, text) => {
+          // find what is likely the author
+          // if (!/^[a-z]/i.test(text.str)) {
+          //   return nearestText;
+          // }
+          let textX = text.transform[4], textY = text.transform[5];
+          let dist = Math.abs(refX - textX) + Math.abs(refY - textY);
+          if (textY <= refY && dist < nearestText[0]) {
+            return [dist, text];
+          }
+          return nearestText;
+        }, [Number.MAX_VALUE, undefined]).pop();
+
+        pdfPage.then((page) => {
+          let viewportWidth = page.getViewport().viewBox[2];
+          let nearestPar = textContent.items
+            .filter((text) => {
+              let deltaX = text.transform[4] - nearestText.transform[4];
+              return (text.transform[5] <= nearestText.transform[5] &&
+                Math.abs(deltaX) < (viewportWidth / 4) &&
+                text !== nearestText);
+            })
+            .sort((t1, t2) => { // by y
+              let dY = t2.transform[5] - t1.transform[5];
+              let dX = t1.transform[4] - t2.transform[4];
+              return Math.abs(dY) > 1e-2 ? dY : dX;
+            })
+            .reduce((parTexts, text) => {
+              let lastY = parTexts[parTexts.length - 1].transform[5];
+              if (lastY - text.transform[5] < 1.05 * lineHeight &&
+                !/^\s*\[\d+\]/.test(text.str) && parTexts.length <= 5) {
+                parTexts.push(text);
+              }
+              return parTexts;
+            }, [nearestText])
+            .map((text) => {
+              return text.str;
+            })
+            .join(' ').trim()
+            .replace(/\s+/ig, ' ')
+            .replace(/(- | [.,])/ig, '')
+            .replace(/\[\d+\]\s+/ig, '');
 
           let req = new XMLHttpRequest();
           let queryUrl = 'https://duckduckgo.com/html?q=' + nearestPar;
@@ -209,9 +279,7 @@ class PDFLinkService {
           req.onerror = scrollToDest;
           req.send();
         });
-      } else {
-        scrollToDest();
-      }
+      });
     };
 
     new Promise((resolve, reject) => {

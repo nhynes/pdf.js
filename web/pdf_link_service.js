@@ -235,7 +235,8 @@ class PDFLinkService {
             .replace(/\[\d+\]\s+/ig, '');
 
           let req = new XMLHttpRequest();
-          let queryUrl = 'https://duckduckgo.com/html?q=' + nearestPar;
+          let queryUrl = 'https://duckduckgo.com/html?q=' +
+            encodeURIComponent(nearestPar);
           req.open('GET', queryUrl);
           req.onload = function() {
             if (this.status < 200 || this.status >= 300) {
